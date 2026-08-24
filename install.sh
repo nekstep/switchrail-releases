@@ -29,6 +29,51 @@ download_file() {
     fi
 }
 
+download_text() {
+    local url="$1"
+    if [ "$DOWNLOADER" = "curl" ]; then
+        curl -fsSL --retry 3 --retry-delay 1 "$url"
+    else
+        wget -q -O - "$url"
+    fi
+}
+
+resolve_latest_tag() {
+    local response tag
+    response="$(download_text "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
+    tag="$(printf '%s\n' "$response" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+
+    if [[ ! "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+        echo "Error: GitHub returned an invalid latest release tag: ${tag:-<empty>}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$tag"
+}
+
+report_installed_version() {
+    local preferred="$1" command_name="$2" candidate="" output=""
+
+    if [ -f "$preferred" ]; then
+        candidate="$preferred"
+    elif command -v "$command_name" >/dev/null 2>&1; then
+        candidate="$(command -v "$command_name")"
+    fi
+
+    if [ -z "$candidate" ]; then
+        echo "Installed: not found" >&2
+        return
+    fi
+
+    if output="$("$candidate" --version 2>/dev/null)" && [ -n "$output" ]; then
+        output="$(printf '%s\n' "$output" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        echo "Installed: $output" >&2
+    else
+        echo "Installed: version unavailable" >&2
+    fi
+    echo "  $candidate" >&2
+}
+
 case "$(uname -s)" in
     Darwin) os="Darwin"; platform_os="macos" ;;
     Linux)  os="Linux"; platform_os="linux" ;;
@@ -59,14 +104,21 @@ else
     binary_name="switchrail"
 fi
 
+installed="$BIN_DIR/$binary_name"
+report_installed_version "$installed" "$binary_name"
+
 if [ -n "$TARGET" ]; then
     version="${TARGET#v}"
     tag="v${version}"
     release_base="https://github.com/${REPO}/releases/download/${tag}"
     display_version="$tag"
 else
-    release_base="https://github.com/${REPO}/releases/latest/download"
-    display_version="latest"
+    if ! tag="$(resolve_latest_tag)"; then
+        echo "Error: cannot resolve the latest Switchrail release" >&2
+        exit 1
+    fi
+    release_base="https://github.com/${REPO}/releases/download/${tag}"
+    display_version="$tag"
 fi
 
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t switchrail-install)"
@@ -78,7 +130,7 @@ checksums_path="$tmpdir/checksums.txt"
 extract_dir="$tmpdir/extract"
 mkdir -p "$extract_dir" "$BIN_DIR"
 
-echo "Installing Switchrail ${display_version} (${platform_os}/${arch})..." >&2
+echo "Downloading: Switchrail ${display_version} (${platform_os}/${arch})" >&2
 echo "  Downloading $archive..." >&2
 if ! download_file "${release_base}/${archive}" "$archive_path"; then
     echo "Error: release asset not found: ${release_base}/${archive}" >&2
@@ -130,7 +182,6 @@ fi
 
 chmod +x "$binary_path" 2>/dev/null || true
 
-installed="$BIN_DIR/$binary_name"
 new_binary="$BIN_DIR/${binary_name}.new.$$"
 cp "$binary_path" "$new_binary"
 chmod +x "$new_binary" 2>/dev/null || true

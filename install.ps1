@@ -115,6 +115,74 @@ function Try-DownloadFile([string]$Url, [string]$OutFile) {
     }
 }
 
+function Get-LatestReleaseTag([string]$Repository) {
+    $url = "https://api.github.com/repos/$Repository/releases/latest"
+    $request = [System.Net.HttpWebRequest]::Create($url)
+    $request.Method = 'GET'
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+    $request.AllowAutoRedirect = $true
+    $request.UserAgent = 'switchrail-installer'
+    $request.Accept = 'application/vnd.github+json'
+    $request.AutomaticDecompression =
+        [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+
+    $response = $null
+    $stream = $null
+    $reader = $null
+
+    try {
+        $response = $request.GetResponse()
+        $stream = $response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $release = ($reader.ReadToEnd() | ConvertFrom-Json)
+        $tag = [string]$release.tag_name
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+
+    if (-not $tag -or $tag -notmatch '^v?\d+\.\d+\.\d+(-[A-Za-z0-9._-]+)?$') {
+        throw "GitHub returned an invalid latest release tag: $tag"
+    }
+
+    return $tag
+}
+
+function Get-InstalledVersion([string]$PreferredPath, [string]$CommandName) {
+    $candidates = @()
+    if (Test-Path -LiteralPath $PreferredPath -PathType Leaf) {
+        $candidates += $PreferredPath
+    }
+
+    $command = Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($command -and $command.Source -and $command.Source -ne $PreferredPath) {
+        $candidates += $command.Source
+    }
+
+    foreach ($candidate in $candidates) {
+        try {
+            $output = @(& $candidate --version 2>$null)
+            if ($LASTEXITCODE -eq 0) {
+                $text = ($output -join ' ').Trim()
+                if ($text) {
+                    return [pscustomobject]@{ Path = $candidate; Version = $text }
+                }
+            }
+        } catch {
+            # Keep looking: an older or damaged binary may not support --version.
+        }
+    }
+
+    if ($candidates.Count -gt 0) {
+        return [pscustomobject]@{ Path = $candidates[0]; Version = 'version unavailable' }
+    }
+
+    return $null
+}
+
 function Add-ToUserPath([string]$Directory) {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $pathEntries = if ($userPath) {
@@ -185,6 +253,17 @@ if (-not $arch) {
 
 $archive = "switchrail_Windows_${arch}.zip"
 $binaryName = 'switchrail.exe'
+$dest = Join-Path $BinDir $binaryName
+
+# --- Report currently installed version ---
+
+$installedVersion = Get-InstalledVersion $dest $binaryName
+if ($installedVersion) {
+    Write-Host "Installed: $($installedVersion.Version)" -ForegroundColor DarkGray
+    Write-Host "  $($installedVersion.Path)" -ForegroundColor DarkGray
+} else {
+    Write-Host 'Installed: not found' -ForegroundColor DarkGray
+}
 
 # --- Resolve release URL ---
 
@@ -194,8 +273,14 @@ if ($Version) {
     $releaseBase = "https://github.com/$Repo/releases/download/$tag"
     $displayVersion = $tag
 } else {
-    $releaseBase = "https://github.com/$Repo/releases/latest/download"
-    $displayVersion = 'latest'
+    try {
+        $tag = Get-LatestReleaseTag $Repo
+    } catch {
+        Write-Error "Cannot resolve the latest Switchrail release: $($_.Exception.Message)"
+        exit 1
+    }
+    $releaseBase = "https://github.com/$Repo/releases/download/$tag"
+    $displayVersion = $tag
 }
 
 # --- Prepare temporary files ---
@@ -213,7 +298,7 @@ New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 try {
     # --- Download release asset ---
 
-    Write-Host "Installing Switchrail $displayVersion (windows/$arch)..." -ForegroundColor Cyan
+    Write-Host "Downloading: Switchrail $displayVersion (windows/$arch)" -ForegroundColor Cyan
     Write-Host "  Downloading $archive..." -ForegroundColor DarkGray
 
     $archiveUrl = "$releaseBase/$archive"
@@ -269,7 +354,6 @@ try {
 
     # --- Install binary (locked-file safe) ---
 
-    $dest = Join-Path $BinDir $binaryName
     $new = "$dest.new.$PID"
     $old = "$dest.old"
 
