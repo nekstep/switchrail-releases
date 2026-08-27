@@ -99,13 +99,35 @@ fi
 if [ "$os" = "Windows" ]; then
     archive="switchrail_${os}_${arch}.zip"
     binary_name="switchrail.exe"
+    alias_name="swr.exe"
 else
     archive="switchrail_${os}_${arch}.tar.gz"
     binary_name="switchrail"
+    alias_name="swr"
 fi
 
 installed="$BIN_DIR/$binary_name"
+alias_path="$BIN_DIR/$alias_name"
 report_installed_version "$installed" "$binary_name"
+
+# Refuse to replace an unrelated command in a custom bin directory. A Windows
+# alias installed by this script is byte-identical to the primary executable;
+# Unix aliases are always relative links to the neighboring binary.
+if [ "$os" = "Windows" ]; then
+    if [ -e "$alias_path" ] && { [ ! -f "$installed" ] || ! cmp -s "$installed" "$alias_path"; }; then
+        echo "Error: refusing to replace existing $alias_path because it is not the installed Switchrail binary." >&2
+        exit 1
+    fi
+elif [ -L "$alias_path" ]; then
+    alias_target="$(readlink "$alias_path" 2>/dev/null || true)"
+    if [ "$alias_target" != "$binary_name" ]; then
+        echo "Error: refusing to replace existing symlink $alias_path -> ${alias_target:-<unreadable>}." >&2
+        exit 1
+    fi
+elif [ -e "$alias_path" ]; then
+    echo "Error: refusing to replace existing $alias_path because it is not a Switchrail symlink." >&2
+    exit 1
+fi
 
 if [ -n "$TARGET" ]; then
     version="${TARGET#v}"
@@ -187,24 +209,59 @@ cp "$binary_path" "$new_binary"
 chmod +x "$new_binary" 2>/dev/null || true
 
 if [ "$os" = "Windows" ]; then
+    new_alias="$BIN_DIR/${alias_name}.new.$$"
     old_binary="$BIN_DIR/${binary_name}.old"
-    rm -f "$old_binary" 2>/dev/null || true
+    old_alias="$BIN_DIR/${alias_name}.old"
+    cp "$binary_path" "$new_alias"
+    chmod +x "$new_alias" 2>/dev/null || true
+    rm -f "$old_binary" "$old_alias" 2>/dev/null || true
+
+    moved_binary=false
+    moved_alias=false
+    if [ -e "$alias_path" ]; then
+        if ! mv -f "$alias_path" "$old_alias" 2>/dev/null; then
+            rm -f "$new_binary" "$new_alias" 2>/dev/null || true
+            echo "Error: existing $alias_name is locked. Stop Switchrail and retry." >&2
+            exit 1
+        fi
+        moved_alias=true
+    fi
     if [ -e "$installed" ] && ! mv -f "$installed" "$old_binary" 2>/dev/null; then
-        rm -f "$new_binary" 2>/dev/null || true
+        [ "$moved_alias" = true ] && mv -f "$old_alias" "$alias_path" 2>/dev/null || true
+        rm -f "$new_binary" "$new_alias" 2>/dev/null || true
         echo "Error: existing $binary_name is locked. Stop Switchrail and retry." >&2
         exit 1
     fi
+    [ -e "$old_binary" ] && moved_binary=true
+
     if ! mv -f "$new_binary" "$installed"; then
-        [ -e "$old_binary" ] && mv -f "$old_binary" "$installed" 2>/dev/null || true
+        [ "$moved_binary" = true ] && mv -f "$old_binary" "$installed" 2>/dev/null || true
+        [ "$moved_alias" = true ] && mv -f "$old_alias" "$alias_path" 2>/dev/null || true
+        rm -f "$new_binary" "$new_alias" 2>/dev/null || true
         echo "Error: failed to install $binary_name" >&2
         exit 1
     fi
-    rm -f "$old_binary" 2>/dev/null || true
+    if ! mv -f "$new_alias" "$alias_path"; then
+        rm -f "$installed" 2>/dev/null || true
+        [ "$moved_binary" = true ] && mv -f "$old_binary" "$installed" 2>/dev/null || true
+        [ "$moved_alias" = true ] && mv -f "$old_alias" "$alias_path" 2>/dev/null || true
+        rm -f "$new_alias" 2>/dev/null || true
+        echo "Error: failed to install $alias_name; the previous installation was restored." >&2
+        exit 1
+    fi
+    rm -f "$old_binary" "$old_alias" 2>/dev/null || true
 else
     mv -f "$new_binary" "$installed"
+    if [ ! -L "$alias_path" ]; then
+        new_alias="$BIN_DIR/${alias_name}.new.$$"
+        rm -f "$new_alias" 2>/dev/null || true
+        ln -s "$binary_name" "$new_alias"
+        mv -f "$new_alias" "$alias_path"
+    fi
 fi
 
 echo "Switchrail installed to $installed" >&2
+echo "Short command installed to $alias_path" >&2
 
 path_has_dir() {
     case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
@@ -243,7 +300,7 @@ export PATH="$HOME/.switchrail/bin:$PATH"
         fi
         printf '\n%s\n' "$new_block" >> "$config_file"
         echo "  Added $BIN_DIR to PATH in $config_file." >&2
-        echo "Restart your terminal, then run 'switchrail'." >&2
+        echo "Restart your terminal, then run 'switchrail' or 'swr'." >&2
     else
         echo "Add $BIN_DIR to PATH:" >&2
         echo '  export PATH="$HOME/.switchrail/bin:$PATH"' >&2
@@ -251,5 +308,5 @@ export PATH="$HOME/.switchrail/bin:$PATH"
 elif [ "$os" = "Windows" ]; then
     echo "To use Switchrail from cmd.exe or PowerShell, add %USERPROFILE%\\.switchrail\\bin to PATH." >&2
 else
-    echo "Run 'switchrail' to get started." >&2
+    echo "Run 'switchrail' or 'swr' to get started." >&2
 fi

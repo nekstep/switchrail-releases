@@ -254,6 +254,28 @@ if (-not $arch) {
 $archive = "switchrail_Windows_${arch}.zip"
 $binaryName = 'switchrail.exe'
 $dest = Join-Path $BinDir $binaryName
+$aliasName = 'swr.exe'
+$aliasDest = Join-Path $BinDir $aliasName
+
+# A previous installer-created alias is byte-identical to switchrail.exe. Do
+# not overwrite an unrelated swr.exe when a custom bin directory is used.
+if (Test-Path -LiteralPath $aliasDest) {
+    if (-not (Test-Path -LiteralPath $aliasDest -PathType Leaf)) {
+        Write-Error "Refusing to replace existing $aliasDest because it is not a file."
+        exit 1
+    }
+    if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
+        Write-Error "Refusing to replace existing $aliasDest because switchrail.exe is not installed beside it."
+        exit 1
+    }
+
+    $primaryHash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
+    $aliasHash = (Get-FileHash -LiteralPath $aliasDest -Algorithm SHA256).Hash
+    if ($primaryHash -ne $aliasHash) {
+        Write-Error "Refusing to replace existing $aliasDest because it is not the installed Switchrail binary."
+        exit 1
+    }
+}
 
 # --- Report currently installed version ---
 
@@ -356,43 +378,66 @@ try {
 
     $new = "$dest.new.$PID"
     $old = "$dest.old"
+    $aliasNew = "$aliasDest.new.$PID"
+    $aliasOld = "$aliasDest.old"
 
-    Remove-Item $new -Force -ErrorAction SilentlyContinue
-    Remove-Item $old -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path $binary.FullName -Destination $new -Force
+    Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $aliasNew -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $aliasOld -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $binary.FullName -Destination $new -Force
+    Copy-Item -LiteralPath $binary.FullName -Destination $aliasNew -Force
 
     $movedOld = $false
+    $movedAliasOld = $false
+    $installedNew = $false
+    $installedAliasNew = $false
     try {
-        if (Test-Path $dest) {
-            try {
-                Move-Item -Path $dest -Destination $old -Force
-                $movedOld = $true
-            } catch {
-                Remove-Item $new -Force -ErrorAction SilentlyContinue
-                Write-Error "Existing switchrail.exe is locked. Stop Switchrail and retry."
-                exit 1
-            }
+        if (Test-Path -LiteralPath $aliasDest) {
+            Move-Item -LiteralPath $aliasDest -Destination $aliasOld -Force
+            $movedAliasOld = $true
+        }
+        if (Test-Path -LiteralPath $dest) {
+            Move-Item -LiteralPath $dest -Destination $old -Force
+            $movedOld = $true
         }
 
-        Move-Item -Path $new -Destination $dest -Force
+        Move-Item -LiteralPath $new -Destination $dest -Force
+        $installedNew = $true
+        Move-Item -LiteralPath $aliasNew -Destination $aliasDest -Force
+        $installedAliasNew = $true
     } catch {
-        Remove-Item $new -Force -ErrorAction SilentlyContinue
-        if ($movedOld -and (Test-Path $old) -and -not (Test-Path $dest)) {
-            Move-Item -Path $old -Destination $dest -Force -ErrorAction SilentlyContinue
+        $installError = $_.Exception.Message
+        if ($installedAliasNew) {
+            Remove-Item -LiteralPath $aliasDest -Force -ErrorAction SilentlyContinue
         }
-        throw
+        if ($installedNew) {
+            Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+        }
+        if ($movedOld -and (Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $dest)) {
+            Move-Item -LiteralPath $old -Destination $dest -Force -ErrorAction SilentlyContinue
+        }
+        if ($movedAliasOld -and (Test-Path -LiteralPath $aliasOld) -and -not (Test-Path -LiteralPath $aliasDest)) {
+            Move-Item -LiteralPath $aliasOld -Destination $aliasDest -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $aliasNew -Force -ErrorAction SilentlyContinue
+        Write-Error "Cannot update switchrail.exe and swr.exe. Stop Switchrail and retry. $installError"
+        exit 1
     }
 
-    Remove-Item $old -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $aliasOld -Force -ErrorAction SilentlyContinue
 
     Write-Host "Switchrail installed to $dest" -ForegroundColor Green
+    Write-Host "Short command installed to $aliasDest" -ForegroundColor Green
 
     # --- Ensure switchrail is on PATH ---
 
     Add-ToUserPath $BinDir
 
     Write-Host ''
-    Write-Host "Run 'switchrail' to get started!" -ForegroundColor Cyan
+    Write-Host "Run 'switchrail' or 'swr' to get started!" -ForegroundColor Cyan
 } finally {
     if (Test-Path $tempRoot) {
         Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
