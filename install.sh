@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -eu
 
 REPO="nekstep/switchrail-releases"
 TARGET="${1:-}"
@@ -96,6 +96,14 @@ if [ "$os" = "darwin" ] && [ "$arch" = "amd64" ]; then
     fi
 fi
 
+if [ "$os" = "windows" ]; then
+    binary_name="switchrail.exe"
+    alias_name="swr.exe"
+else
+    binary_name="switchrail"
+    alias_name="swr"
+fi
+
 installed="$BIN_DIR/$binary_name"
 alias_path="$BIN_DIR/$alias_name"
 report_installed_version "$installed" "$binary_name"
@@ -137,12 +145,8 @@ archive_version="${display_version#v}"
 
 if [ "$os" = "windows" ]; then
     archive="switchrail_${archive_version}_${os}_${arch}.zip"
-    binary_name="switchrail.exe"
-    alias_name="swr.exe"
 else
     archive="switchrail_${archive_version}_${os}_${arch}.tar.gz"
-    binary_name="switchrail"
-    alias_name="swr"
 fi
 
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t switchrail-install)"
