@@ -75,35 +75,25 @@ report_installed_version() {
 }
 
 case "$(uname -s)" in
-    Darwin) os="Darwin"; platform_os="macos" ;;
-    Linux)  os="Linux"; platform_os="linux" ;;
-    MINGW* | MSYS* | CYGWIN*) os="Windows"; platform_os="windows" ;;
+    Darwin) os="darwin"; platform_os="macos" ;;
+    Linux)  os="linux"; platform_os="linux" ;;
+    MINGW* | MSYS* | CYGWIN*) os="windows"; platform_os="windows" ;;
     *) echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
 
 case "$(uname -m)" in
-    x86_64|amd64|AMD64) arch="x86_64" ;;
+    x86_64|amd64|AMD64) arch="amd64" ;;
     arm64|aarch64|ARM64) arch="arm64" ;;
     *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
 # Rosetta may report x86_64 on Apple Silicon. Prefer the native arm64 build.
-if [ "$os" = "Darwin" ] && [ "$arch" = "x86_64" ]; then
+if [ "$os" = "darwin" ] && [ "$arch" = "amd64" ]; then
     sysctl_bin="$(command -v sysctl || echo /usr/sbin/sysctl)"
     if [ "$("$sysctl_bin" -n hw.optional.arm64 2>/dev/null || true)" = "1" ]; then
         echo "Apple Silicon detected (Rosetta shell); installing native arm64 build." >&2
         arch="arm64"
     fi
-fi
-
-if [ "$os" = "Windows" ]; then
-    archive="switchrail_${os}_${arch}.zip"
-    binary_name="switchrail.exe"
-    alias_name="swr.exe"
-else
-    archive="switchrail_${os}_${arch}.tar.gz"
-    binary_name="switchrail"
-    alias_name="swr"
 fi
 
 installed="$BIN_DIR/$binary_name"
@@ -113,7 +103,7 @@ report_installed_version "$installed" "$binary_name"
 # Refuse to replace an unrelated command in a custom bin directory. A Windows
 # alias installed by this script is byte-identical to the primary executable;
 # Unix aliases are always relative links to the neighboring binary.
-if [ "$os" = "Windows" ]; then
+if [ "$os" = "windows" ]; then
     if [ -e "$alias_path" ] && { [ ! -f "$installed" ] || ! cmp -s "$installed" "$alias_path"; }; then
         echo "Error: refusing to replace existing $alias_path because it is not the installed Switchrail binary." >&2
         exit 1
@@ -141,6 +131,18 @@ else
     fi
     release_base="https://github.com/${REPO}/releases/download/${tag}"
     display_version="$tag"
+fi
+
+archive_version="${display_version#v}"
+
+if [ "$os" = "windows" ]; then
+    archive="switchrail_${archive_version}_${os}_${arch}.zip"
+    binary_name="switchrail.exe"
+    alias_name="swr.exe"
+else
+    archive="switchrail_${archive_version}_${os}_${arch}.tar.gz"
+    binary_name="switchrail"
+    alias_name="swr"
 fi
 
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t switchrail-install)"
@@ -185,7 +187,7 @@ else
     echo "  Warning: checksums.txt not found; continuing without checksum verification." >&2
 fi
 
-if [ "$os" = "Windows" ]; then
+if [ "$os" = "windows" ]; then
     if command -v unzip >/dev/null 2>&1; then
         unzip -q "$archive_path" -d "$extract_dir"
     else
@@ -208,7 +210,7 @@ new_binary="$BIN_DIR/${binary_name}.new.$$"
 cp "$binary_path" "$new_binary"
 chmod +x "$new_binary" 2>/dev/null || true
 
-if [ "$os" = "Windows" ]; then
+if [ "$os" = "windows" ]; then
     new_alias="$BIN_DIR/${alias_name}.new.$$"
     old_binary="$BIN_DIR/${binary_name}.old"
     old_alias="$BIN_DIR/${alias_name}.old"
@@ -267,7 +269,7 @@ path_has_dir() {
     case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac
 }
 
-if [ "$os" != "Windows" ] && ! path_has_dir "$BIN_DIR"; then
+if [ "$os" != "windows" ] && ! path_has_dir "$BIN_DIR"; then
     user_shell="$(basename "${SHELL:-}")"
     config_file=""
     case "$user_shell" in
@@ -305,7 +307,7 @@ export PATH="$HOME/.switchrail/bin:$PATH"
         echo "Add $BIN_DIR to PATH:" >&2
         echo '  export PATH="$HOME/.switchrail/bin:$PATH"' >&2
     fi
-elif [ "$os" = "Windows" ]; then
+elif [ "$os" = "windows" ]; then
     echo "To use Switchrail from cmd.exe or PowerShell, add %USERPROFILE%\\.switchrail\\bin to PATH." >&2
 else
     echo "Run 'switchrail' or 'swr' to get started." >&2

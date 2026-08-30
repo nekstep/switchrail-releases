@@ -240,7 +240,7 @@ $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) {
 }
 
 $arch = switch ($nativeArch.ToUpperInvariant()) {
-    'AMD64' { 'x86_64' }
+    'AMD64' { 'amd64' }
     'ARM64' { 'arm64' }
     'X86'   { $null }
     default { $null }
@@ -251,7 +251,6 @@ if (-not $arch) {
     exit 1
 }
 
-$archive = "switchrail_Windows_${arch}.zip"
 $binaryName = 'switchrail.exe'
 $dest = Join-Path $BinDir $binaryName
 $aliasName = 'swr.exe'
@@ -304,6 +303,9 @@ if ($Version) {
     $releaseBase = "https://github.com/$Repo/releases/download/$tag"
     $displayVersion = $tag
 }
+
+$archive_version = $displayVersion -replace '^v', ''
+$archive = "switchrail_{$archive_version}_windows_${arch}.zip"
 
 # --- Prepare temporary files ---
 
