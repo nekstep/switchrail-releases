@@ -305,7 +305,7 @@ if ($Version) {
 }
 
 $archive_version = $displayVersion -replace '^v', ''
-$archive = "switchrail_{$archive_version}_windows_${arch}.zip"
+$archive = "switchrail_${archive_version}_windows_${arch}.zip"
 
 # --- Prepare temporary files ---
 
